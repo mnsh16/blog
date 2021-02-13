@@ -1,0 +1,579 @@
+---
+title: "sqlite, feather, and fst"
+author: Karl
+date: 2017-04-30T14:07:00-05:00
+categories: ["R"]
+tags: ["R", "programming", "SQL", "feather", "fst", "big data"]
+description: "Exploring methods for storing/accessing large data sets from R"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE)
+library(broman)
+set.seed(1979300)
+```
+
+I don't think I'm unusual among statisticians in having avoided
+working directly with databases for much of my career. The data for my
+projects have been reasonably small. (In fact, basically all of the
+data for my 20 years of projects are on my laptop's drive.) Flat files
+(such as CSV files) were sufficient.
+
+But I've finally entered the modern era of biggish data. (Why do they
+call it _big_ data? That doesn't leave us much room for gradations of
+size. In the 90's, statisticians talked about [_massive_
+data](https://www.nap.edu/read/5505/chapter/1).) And particularly for
+visualization of large-scale data, I don't want to load everything in
+advance, and I want rapid access to slices of data.
+
+So I've been playing with [SQLite](https://www.sqlite.org/) and
+[MongoDB](https://www.mongodb.com/), and more recently
+[feather](https://github.com/wesm/feather) and
+[fst](http://www.fstpackage.org). And I thought I'd show a few
+examples. I'm interested mostly in quick access, from
+[R](https://www.r-project.org), to small portions of a large file.
+
+### data, rds
+
+Let me start by simulating some data. I'm mostly thinking about the
+case of 500 100k-SNP arrays. So the data are pairs of intensity
+measures for the two alleles at each of 100k SNPs in 500 samples. And
+typically I want to grab the 500 pairs of intensities for a given SNP.
+I'm going to just simulate IID noise, because for these illustrations
+I don't really care about the contents so much as the storage size and
+I/O speed.
+
+(_Note: this stuff takes a long time to run, so the
+[actual code behind the scenes](https://github.com/kbroman/blog/blob/source/content/post/2017-04-30-sqlite-feather-and-fst.Rmd)
+is more complicated, with me having cached the timings and
+skipped the actual runs._)
+
+```{r simulate_data, eval=FALSE}
+n_ind <- 500
+n_snps <- 1e5
+ind_names <- paste0("ind", 1:n_ind)
+snp_names <- paste0("snp", 1:n_snps)
+sigX <- matrix(rnorm(n_ind*n_snps), nrow=n_ind)
+sigY <- matrix(rnorm(n_ind*n_snps), nrow=n_ind)
+dimnames(sigX) <- list(ind_names, paste0(snp_names, ".X"))
+dimnames(sigY) <- list(ind_names, paste0(snp_names, ".Y"))
+db <- cbind(data.frame(id=ind_names, stringsAsFactors=FALSE),
+            sigX, sigY)
+```
+
+```{r simulate_data_really, include=FALSE}
+cache_file <- "_cache/2017-04-30-sqlite-etc.RData"
+if(file.exists(cache_file)) {
+    load(cache_file)
+    not_cached <- FALSE
+} else {
+  <<simulate_data>>
+  not_cached <- TRUE
+}
+```
+
+My typical approach with data like this is to save it in an RDS file and
+just read the whole thing into memory if I want to work with it. But
+it's rather slow to write and read such a big data set.
+
+```{r write_rds, eval=FALSE}
+rds_file <- "db.rds"
+saveRDS(db, rds_file)
+db_copy <- readRDS(rds_file)
+```
+
+```{r write_rds_really, include=FALSE}
+if(not_cached) {
+    rds_file <- "db.rds"
+    write_rds_time <- system.time(saveRDS(db, rds_file))
+    read_rds_time <- system.time(db_copy <- readRDS(rds_file))
+    rds_size <- round(file.info("db.rds")$size/10^6)
+}
+```
+
+
+It was like `r round(write_rds_time[3])` sec to write the RDS
+file, and `r myround(read_rds_time[3], 1)` sec to read it. The file
+itself is `r (rds_size)` MB.
+
+### sqlite
+
+[Mongo](https://www.mongodb.com) is cool, and I think ultimately it
+will be useful to me, but [SQLite](https://www.sqlite.org/) has the
+advantage of being a single file that you can hand to others. And
+installation is easy: you just need
+[`install.packages("RSQLite")`](https://cran.rstudio.com/package=RSQLite/).
+
+SQLite won't take more than [2000
+columns](https://sqlite.org/limits.html) (or maybe 32,767 if you
+change a compile-time parameter), so we need to take the transpose of
+our data frame.
+
+```{r transpose_df, eval=FALSE}
+t_db <- cbind(data.frame(snp=rep(snp_names, 2),
+                         signal=rep(c("X", "Y"), each=n_snps),
+                         stringsAsFactors=FALSE),
+              rbind(t(sigX), t(sigY)))
+```
+
+```{r transpose_df_really, include=FALSE}
+if(not_cached) {
+  <<transpose_df>>
+}
+```
+
+
+Let's rearrange it so that the two rows for a given SNP are next to
+each other.
+
+```{r put_snp_rows_together, eval=FALSE}
+db_rows <- as.numeric(matrix(1:nrow(t_db), byrow=TRUE, nrow=2))
+t_db <- t_db[db_rows,]
+```
+
+```{r put_snp_rows_together_really, include=FALSE}
+if(not_cached) {
+  <<put_snp_rows_together>>
+}
+```
+
+To write to a SQLite file, we use `dbConnect` to create a database
+connection, and then `dbWriteTable`. We can use `dbDisconnect` to
+disconnect afterwards, if we're done.
+
+```{r write_sqlite, eval=FALSE}
+library(RSQLite)
+sqlite_file <- "t_db.sqlite"
+sqldb <- dbConnect(SQLite(), dbname=sqlite_file)
+dbWriteTable(sqldb, "snps", t_db, row.names=FALSE, overwrite=TRUE,
+             append=FALSE, field.types=NULL)
+dbDisconnect(sqldb)
+```
+
+```{r write_sqlite_really, include=FALSE}
+if(not_cached) {
+    library(RSQLite)
+    sqlite_file <- "t_db.sqlite"
+    sqldb <- dbConnect(SQLite(), dbname=sqlite_file)
+    write_sqlite_time <- system.time(dbWriteTable(sqldb, "snps", t_db,
+                                               row.names=FALSE, overwrite=TRUE,
+                                               append=FALSE, field.types=NULL))
+    dbDisconnect(sqldb)
+    sqlite_size <- file.info(sqlite_file)$size/10^6
+}
+```
+
+The writing took `r round(write_sqlite_time[3])` sec, and the
+resulting file is `r round(sqlite_size)` MB.
+
+A key advantage of SQLite is to be able to quickly access a portion of
+the data, for example to grab the two rows for a particular SNP. You'd
+need to know the SNP names, first, which you can get by grabbing that
+column (or _field_) with `dbGetQuery`. A data frame is returned, so we
+select the first column.
+
+```{r sqlite_snp_names, eval=FALSE}
+sqldb <- dbConnect(SQLite(), dbname=sqlite_file)
+snp_names <- dbGetQuery(sqldb, 'select snp from snps')[,1]
+```
+
+```{r sqlite_snp_names_really, include=FALSE}
+if(not_cached) {
+    <<sqlite_snp_names>>
+}
+```
+
+We can call `dbGetQuery` again to get the two rows of data for a given SNP.
+
+```{r query_sqlite, eval=FALSE}
+random_snp <- sample(snp_names, 1)
+query <- paste0('select * from snps where snp == "', random_snp, '"')
+system.time(z <- dbGetQuery(sqldb, query))
+```
+
+```{r query_sqlite_really, include=FALSE}
+if(not_cached) {
+    <<query_sqlite>>
+    sqlite_query_time <- system.time(z <- dbGetQuery(sqldb, query))
+}
+```
+
+```{r query_sqlite_time, echo=FALSE}
+print(sqlite_query_time)
+```
+
+
+Such queries are faster if we first add an index on the SNP names.
+
+```{r sqlite_index, eval=FALSE}
+dbGetQuery(sqldb, "CREATE INDEX snp ON snps(snp)")
+```
+
+```{r sqlite_index_really, include=FALSE}
+if(not_cached) {
+    <<sqlite_index>>
+    sqlite_size_2 <- file.info(sqlite_file)$size/10^6
+}
+```
+
+The file is basically the same size,
+`r round(sqlite_size_2)` MB, and queries
+are now all but instantaneous.
+
+```{r query_sqlite_windex, eval=FALSE}
+random_snp <- sample(snp_names, 1)
+query <- paste0('select * from snps where snp == "', random_snp, '"')
+system.time(z <- dbGetQuery(sqldb, query))
+```
+
+```{r query_sqlite_windex_really, include=FALSE}
+if(not_cached) {
+    <<query_sqlite_windex>>
+    sqlite_query_time_2 <- system.time(z <- dbGetQuery(sqldb, query))
+}
+```
+
+```{r query_sqlite_time_2, echo=FALSE}
+print(sqlite_query_time_2)
+```
+
+### feather
+
+I'd understood [feather](https://github.com/wesm/feather) to be a
+quick way of transferring data between python and R; [Petr
+Simacek](https://simecek.github.io/) convinced me of its more-broad
+uses, such as to take the place of a single-table database.
+
+Writing a feather file is surprisingly fast, and reading it back in is
+even faster.
+
+```{r feather, eval=FALSE}
+library(feather)
+feather_file <- "t_db.feather"
+write_feather(t_db, feather_file)
+t_db_clone <- read_feather(feather_file)
+```
+
+```{r feather_really, include=FALSE}
+if(not_cached) {
+    library(feather)
+    feather_file <- "t_db.feather"
+    write_feather_time <- system.time(write_feather(t_db, feather_file))
+    read_feather_time <- system.time(t_db_clone <- read_feather(feather_file))
+    feather_size <- file.info(feather_file)$size/10^6
+}
+```
+
+That took about `r round(write_feather_time[3])` sec to write, and
+`r myround(read_feather_time[3], 1)` sec to read, and the file is
+about `r round(feather_size)` MB.
+
+But queries of particular columns or rows are fast, too. So you can
+basically use feather like a database.
+
+```{r feather_query, eval=FALSE}
+db_f <- feather(feather_file)
+snp_names <- unlist(db_f[,"snp"])
+random_snp <- sample(snp_names, 1)
+system.time(z <- db_f[snp_names==random_snp,])
+```
+
+```{r feather_query_really, include=FALSE}
+if(not_cached) {
+    <<feather_query>>
+    feather_query_time <- system.time(z <- db_f[snp_names==random_snp,])
+}
+```
+
+```{r feather_query_time, echo=FALSE}
+print(feather_query_time)
+```
+
+In this particular case, it's actually quite a bit faster to work with
+feather the other way around; that is, in the original format of 500
+arrays x 100k SNPs.
+
+```{r feather2, eval=FALSE}
+feather_file_2 <- "db.feather"
+write_feather(db, feather_file_2)
+db_clone <- read_feather(feather_file_2)
+```
+
+```{r feather2_really, include=FALSE}
+if(not_cached) {
+    feather_file_2 <- "db.feather"
+    write_feather_time_2 <- system.time(write_feather(db, feather_file_2))
+    read_feather_time_2 <- system.time(db_clone <- read_feather(feather_file_2))
+    feather_size_2 <- file.info(feather_file_2)$size/10^6
+}
+```
+
+That took about `r round(write_feather_time_2[3])` sec to write, and
+`r myround(read_feather_time_2[3], 1)` sec to read, and the file is
+about `r round(feather_size_2)` MB.
+
+Accessing particular rows is just as easy. First a bit of code to grab
+the SNP names by grabbing the column names,
+getting rid of the `".X"` or `".Y"` bits at the end, and then taking
+the first half.
+
+```{r feather_snp_names, eval=FALSE}
+db_f_2 <- feather(feather_file_2)
+snp_names <- sub("\\.[XY]$", "", colnames(db_f_2))
+snp_names <- snp_names[1:(length(snp_names)/2)]
+```
+
+```{r feather_snp_names_really, include=FALSE}
+if(not_cached) {
+    <<feather_snp_names>>
+}
+```
+
+
+Now, we grab the data for a random SNP by pasting `".X"` and `".Y"`
+back onto the SNP name.
+
+```{r feather_query_2, eval=FALSE}
+random_snp <- sample(snp_names, 1)
+system.time(z <- db_f_2[,c("id", paste0(random_snp, c(".X", ".Y")))])
+```
+
+```{r feather_query_2_really, include=FALSE}
+if(not_cached) {
+    <<feather_query_2>>
+    feather_query_time_2 <- system.time(z <- db_f_2[,c("id", paste0(random_snp, c(".X", ".Y")))])
+}
+```
+
+```{r feather_query_time_2, echo=FALSE}
+print(feather_query_time_2)
+```
+
+Note that you can also use [dplyr](https://github.com/tidyverse/dplyr)
+with [feather](https://github.com/wesm/feather) as if you've got an
+in-memory data frame.
+
+### fst
+
+After [tweeting about feather](https://twitter.com/kwbroman/status/855112575373148162),
+[Dirk Eddelbuettel](http://dirk.eddelbuettel.com/) suggested that I
+look at the [fst package](http://www.fstpackage.org/). It's not quite
+as slick to take data slices, but it's potentially faster and you can write a
+compressed file to save disk space.
+
+Like SQLite, it's best not to have _too_ many columns, so we'll work
+with the transposed version of the data frame, with SNPs as rows.
+Writing and reading are fast.
+
+```{r write_fst, eval=FALSE}
+library(fst)
+fst_file <- "db.fst"
+write.fst(t_db, fst_file)
+t_db_clone <- read.fst(fst_file)
+```
+
+```{r write_fst_really, include=FALSE}
+if(not_cached) {
+    library(fst)
+    fst_file <- "db.fst"
+    write_fst_time <- system.time(write.fst(t_db, fst_file))
+    read_fst_time <- system.time(t_db_clone <- read.fst(fst_file))
+    fst_size <- file.info(fst_file)$size/10^6
+}
+```
+
+That took `r myround(write_fst_time[3], 1)` sec to write,
+`r myround(read_fst_time[3], 1)` sec to read, and the file is about
+`r round(fst_size)` MB.
+
+Writing a compressed file is quite a bit slower. Here at 80%
+compression.
+
+```{r write_fstcomp, eval=FALSE}
+fstcomp_file <- "db_comp.fst"
+write.fst(t_db, fstcomp_file, 80)
+t_db_clone <- read.fst(fstcomp_file)
+```
+
+```{r write_fstcomp_really, include=FALSE}
+if(not_cached) {
+    fstcomp_file <- "db_comp.fst"
+    write_fstcomp_time <- system.time(write.fst(t_db, fstcomp_file, 80))
+    read_fstcomp_time <- system.time(t_db_clone <- read.fst(fstcomp_file))
+    fstcomp_size <- file.info(fstcomp_file)$size/10^6
+}
+```
+
+That took `r myround(write_fstcomp_time[3], 1)` sec to write,
+`r myround(read_fstcomp_time[3], 1)` sec to read, and the file is about
+`r round(fstcomp_size)` MB.
+
+Doing queries on an [fst](http://www.fstpackage.org) file is not quite
+as slick as for [feather](https://github.com/wesm/feather), but it's
+fast. The `read.fst` function has a `columns` argument to grab
+particular columns, and `from` and `to` arguments to grab a slice of
+rows.
+
+We'll first grab the `snp` column to get the SNP names. And let's just
+work with the compressed version of the file. Since `read.fst` will
+return a one-column data frame, we grab the first column to make it a
+vector.
+
+```{r fst_grab_snps, eval=FALSE}
+snp_names <- read.fst(fstcomp_file, "snp")[,1]
+```
+
+```{r fst_grab_snps_really, include=FALSE}
+if(not_cached) {
+    <<fst_grab_snps>>
+}
+```
+
+Now we can choose a random SNP, find the corresponding rows, and
+then use `from` and `to` to grab those two rows. You can see it's
+useful to have the the pairs of rows for each SNP be contiguous.
+
+```{r fst_grab_a_snp, eval=FALSE}
+random_snp <- sample(snp_names, 1)
+wh_rows <- which(random_snp == snp_names)
+system.time(z <- read.fst(fstcomp_file, from=wh_rows[1], to=wh_rows[2]))
+```
+
+```{r fst_grab_a_snp_really, include=FALSE}
+if(not_cached) {
+    <<fst_grab_a_snp>>
+    fstcomp_query_time <- system.time(z <- read.fst(fstcomp_file, from=wh_rows[1], to=wh_rows[2]))
+}
+```
+
+```{r fst_grab_a_snp_time, echo=FALSE}
+print(fstcomp_query_time)
+```
+
+### timings
+
+Let's use the [microbenchmark](https://cran.r-project.org/package=microbenchmark)
+package to compare timings for grabbing a random SNP. First a bit of set-up.
+
+```{r setup4microbenchmark, eval=FALSE}
+random_snp <- sample(snp_names, 1)
+library(microbenchmark)
+sqlite_file <- "t_db.sqlite"
+sqldb <- dbConnect(SQLite(), dbname=sqlite_file)
+query <- paste0('select * from snps where snp == "', random_snp, '"')
+db_f <- feather(feather_file)
+db_f_2 <- feather(feather_file_2)
+```
+
+```{r setup4microbenchmark_really, include=FALSE}
+if(not_cached) {
+    <<setup4microbenchmark>>
+}
+```
+
+Now the timings.
+
+```{r time_access, eval=FALSE}
+microbenchmark(sqlite=dbGetQuery(sqldb, query),
+               feather=db_f[snp_names==random_snp,],
+               feather_t=db_f_2[,c("id", paste0(random_snp, c(".X",".Y")))],
+               fst={wh_rows <- which(random_snp == snp_names)
+                    read.fst(fst_file, from=wh_rows[1], to=wh_rows[2])},
+               fstcomp={wh_rows <- which(random_snp == snp_names)
+                    read.fst(fstcomp_file, from=wh_rows[1], to=wh_rows[2])},
+               times=100)
+```
+
+```{r time_access_really, include=FALSE}
+if(not_cached) {
+    mbm <- microbenchmark(sqlite=dbGetQuery(sqldb, query),
+                          feather=db_f[snp_names==random_snp,],
+                          feather_t=db_f_2[,c("id", paste0(random_snp, c(".X",".Y")))],
+                          fst={wh_rows <- which(random_snp == snp_names)
+                               read.fst(fst_file, from=wh_rows[1], to=wh_rows[2])},
+                          fstcomp={wh_rows <- which(random_snp == snp_names)
+                                   read.fst(fstcomp_file, from=wh_rows[1], to=wh_rows[2])},
+                          times=100)
+}
+```
+
+```{r time_access_print, echo=FALSE}
+library(microbenchmark)
+print(mbm, digits=1)
+```
+
+
+Here's a summary of all of the results:
+
+```{r construct_table, echo=FALSE}
+if(not_cached) {
+    results <- data.frame(write_time= c(rds=write_rds_time[3],
+                                        sqlite=write_sqlite_time[3],
+                                        feather=write_feather_time[3],
+                                        feather=write_feather_time_2[3],
+                                        fst=write_fst_time[3],
+                                        fst_comp=write_fstcomp_time[3]),
+                          read_time=  c(rds=read_rds_time[3],
+                                        sqlite=NA,
+                                        feather=read_feather_time[3],
+                                        feather_t=read_feather_time_2[3],
+                                        fst=read_fst_time[3],
+                                        fst_comp=read_fstcomp_time[3]),
+                          file_MB=    c(rds=rds_size,
+                                        sqlite=sqlite_size,
+                                        feather=feather_size,
+                                        feather_t=feather_size_2,
+                                        fst=fst_size,
+                                        fst_comp=fstcomp_size),
+                          access_time=c(rds=NA,tapply(mbm$time/1e6, mbm$expr, mean)))
+    rownames(results) <- c("rds", "sqlite", "feather", "feather (tr)", "fst", "fst (compr)")
+}
+```
+
+```{r print_table}
+knitr::kable(results, digits=c(1,1,0,1),
+             col.names=c("write time (s)", "read time (s)",
+                         "file size (MB)", "access time (ms)"))
+```
+
+I don't think we can draw general conclusions about the relative speed
+and file size of the three approaches from these results. And I think
+they're all really useful and interesting.
+
+But in this particular case, the file compression didn't really help
+with [fst](http://www.fstpackage.org) and slowed things down.
+When accessing the data,
+[feather](https://github.com/wesm/feather) was considerably faster
+than [fst](http://www.fstpackage.org) when the data were organized
+with the SNPs as columns, but was considerably slower when the data
+were in the opposite orientation. [SQLite](https://www.sqlite.org/)
+has much faster access times, but with a larger file size that takes
+longer to write.
+
+
+```{r write_cache, include=FALSE}
+if(not_cached) {
+    save(write_rds_time, read_rds_time, rds_size,
+         write_sqlite_time, sqlite_size, sqlite_size_2, sqlite_query_time, sqlite_query_time_2,
+         write_feather_time, read_feather_time, feather_size,
+         feather_query_time,
+         write_feather_time_2, read_feather_time_2, feather_size_2,
+         feather_query_time_2,
+         write_fst_time, read_fst_time, fst_size,
+         write_fstcomp_time, read_fstcomp_time, fstcomp_size,
+         fstcomp_query_time,
+         mbm, results,
+         file=cache_file)
+}
+```
+
+```{r cleanup, include=FALSE}
+if(not_cached) {
+    unlink(rds_file)
+    unlink(sqlite_file)
+    unlink(feather_file)
+    unlink(feather_file_2)
+    unlink(fst_file)
+    unlink(fstcomp_file)
+}
+```

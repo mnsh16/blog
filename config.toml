@@ -1,0 +1,57 @@
+baseurl = ""
+relativeurls=true
+languageCode = "en-us"
+title = "the stupidest thing..."
+theme = "hugo-lithium"
+googleAnalytics = ""
+disqusShortname = ""
+ignoreFiles = ["\\.Rmd$", "\\.Rmarkdown$", "_cache$", "\\.knit\\.md$", "\\.utf8\\.md$"]
+rssLimit = 30
+
+copyright = "The text in this work is licensed under CC-BY-4.0, https://creativecommons.org/licenses/by/4.0/legalcode; code licensed under the MIT license"
+
+[author]
+    name = "Karl Broman"
+
+[permalinks]
+    post = "/:year/:month/:day/:slug/"
+
+[[menu.main]]
+    name = "about"
+    url = "https://kbroman.org/blog/about"
+[[menu.main]]
+    name = "github"
+    url = "https://github.com/kbroman"
+[[menu.main]]
+    name = "twitter"
+    url = "https://twitter.com/kwbroman"
+[[menu.main]]
+    name = "web"
+    url = "https://kbroman.org"
+
+[markup.goldmark.renderer]
+unsafe= true
+
+[params]
+    description = "Karl Broman's blog: The stupidest thing... statistics, genetics, programming, academics."
+    fullUrl = "https://kbroman.org/blog"
+    githubContentUrl = "https://github.com/kbroman/blog/edit/source/content/"
+    customCSS = ["css/custom.css"]
+
+    # options for highlight.js (version, additional languages, and theme)
+    highlightjsVersion = "9.12.0"
+    highlightjsCDN = "//cdnjs.cloudflare.com/ajax/libs"
+    highlightjsLang = ["r", "yaml"]
+    highlightjsTheme = "github"
+
+    MathJaxCDN = "//cdnjs.cloudflare.com/ajax/libs"
+    MathJaxVersion = "2.7.5"
+
+    # path to the favicon, under "static"
+    favicon = "favicon.ico"
+
+    [params.logo]
+    url = "karl.png"
+    width = 50
+    height = 50
+    alt = "Logo"
