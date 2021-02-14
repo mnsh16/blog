@@ -18,13 +18,13 @@ copyright = "The text in this work is licensed under CC-BY-4.0, https://creative
 
 [[menu.main]]
     name = "about"
-    url = "https://kbroman.org/blog/about"
+    url = "https://mnsh16.github.io/blog/about"
 [[menu.main]]
     name = "github"
     url = "https://github.com/mnsh16"
 [[menu.main]]
     name = "twitter"
-    url = "https://twitter.com/kwbroman"
+    url = "https://twitter.com/manishy_iitk16"
 [[menu.main]]
     name = "web"
     url = "https://mnsh16.github.io/blog/"
@@ -35,7 +35,7 @@ unsafe= true
 [params]
     description = "Trial blog: Random things... "
     fullUrl = "https://mnsh16.github.io/blog/"
-    githubContentUrl = "https://github.com/mnsh16/blog/edit/source/content/"
+    githubContentUrl = "https://github.com/mnsh16/blog/tree/gh-pages/content/"
     customCSS = ["css/custom.css"]
 
     # options for highlight.js (version, additional languages, and theme)
