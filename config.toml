@@ -1,7 +1,7 @@
 baseurl = ""
 relativeurls=true
 languageCode = "en-us"
-title = "the stupidest thing..."
+title = "blog trial thing..."
 theme = "hugo-lithium"
 googleAnalytics = ""
 disqusShortname = ""
@@ -11,7 +11,7 @@ rssLimit = 30
 copyright = "The text in this work is licensed under CC-BY-4.0, https://creativecommons.org/licenses/by/4.0/legalcode; code licensed under the MIT license"
 
 [author]
-    name = "Karl Broman"
+    name = "Manish Yadav"
 
 [permalinks]
     post = "/:year/:month/:day/:slug/"
@@ -21,21 +21,21 @@ copyright = "The text in this work is licensed under CC-BY-4.0, https://creative
     url = "https://kbroman.org/blog/about"
 [[menu.main]]
     name = "github"
-    url = "https://github.com/kbroman"
+    url = "https://github.com/mnsh16"
 [[menu.main]]
     name = "twitter"
     url = "https://twitter.com/kwbroman"
 [[menu.main]]
     name = "web"
-    url = "https://kbroman.org"
+    url = "https://mnsh16.github.io/blog/"
 
 [markup.goldmark.renderer]
 unsafe= true
 
 [params]
-    description = "Karl Broman's blog: The stupidest thing... statistics, genetics, programming, academics."
-    fullUrl = "https://kbroman.org/blog"
-    githubContentUrl = "https://github.com/kbroman/blog/edit/source/content/"
+    description = "Trial blog: Random things... "
+    fullUrl = "https://mnsh16.github.io/blog/"
+    githubContentUrl = "https://github.com/mnsh16/blog/edit/source/content/"
     customCSS = ["css/custom.css"]
 
     # options for highlight.js (version, additional languages, and theme)
